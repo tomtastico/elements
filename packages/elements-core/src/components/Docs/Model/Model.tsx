@@ -1,5 +1,18 @@
 import { JsonSchemaViewer } from '@stoplight/json-schema-viewer';
-import { Box, CopyButton, Flex, Heading, HStack, NodeAnnotation, Panel, Select, Text, VStack } from '@stoplight/mosaic';
+import {
+  Box,
+  Button,
+  CopyButton,
+  Flex,
+  Heading,
+  HStack,
+  Input,
+  NodeAnnotation,
+  Panel,
+  Select,
+  Text,
+  VStack,
+} from '@stoplight/mosaic';
 import { CodeViewer } from '@stoplight/mosaic-code-viewer';
 import { withErrorBoundary } from '@stoplight/react-error-boundary';
 import cn from 'classnames';
@@ -29,6 +42,9 @@ const ModelComponent: React.FC<ModelProps> = ({
 }) => {
   const [resolveRef, maxRefDepth] = useSchemaInlineRefResolver();
   const data = useResolvedObject(unresolvedData) as JSONSchema7;
+  const [filteredModel, setFilteredModel] = React.useState(getOriginalObject(data));
+  const [searchValue, setSearchValue] = React.useState<string>('');
+  const [expandDepth, setExpandDepth] = React.useState<number>(2);
   const { nodeHasChanged } = useOptionsCtx();
 
   const { ref: layoutRef, isCompact } = useIsCompact(layoutOptions);
@@ -37,6 +53,64 @@ const ModelComponent: React.FC<ModelProps> = ({
   const title = data.title ?? nodeTitle;
   const isDeprecated = !!data['deprecated'];
   const isInternal = !!data['x-internal'];
+
+  React.useEffect(() => {
+    function filterSchema(schema: any, searchString: string) {
+      let maxDepth = 0;
+
+      // Recursive function to filter the schema and track depth
+      function filterProperties(properties: any, currentDepth: number) {
+        const filtered = {};
+        if (!properties) return filtered;
+        for (const [key, value] of Object.entries<any>(properties)) {
+          let include = key.includes(searchString) || (value.description && value.description.includes(searchString));
+          if (include && currentDepth > maxDepth) {
+            maxDepth = currentDepth;
+          }
+
+          if (value.type === 'object' && value.properties) {
+            const filteredChild = filterProperties(value.properties, currentDepth + 1);
+            if (Object.keys(filteredChild).length > 0) {
+              // Include parent if children match
+              filtered[key] = { ...value, properties: filteredChild };
+              include = true;
+            }
+          } else if (value.type === 'array' && value.items && typeof value.items === 'object') {
+            const filteredChildItems = filterProperties(value.items.properties, currentDepth + 1);
+            if (Object.keys(filteredChildItems).length > 0) {
+              // Include array property if children match
+              filtered[key] = {
+                ...value,
+                items: { ...value.items, properties: filteredChildItems },
+              };
+              include = true;
+            }
+          }
+
+          // If there's a direct match, add property
+          if (include && !filtered.hasOwnProperty(key)) {
+            filtered[key] = value;
+          }
+        }
+        return filtered;
+      }
+
+      const filteredSchema = filterProperties(schema, 0);
+
+      return { filteredSchema, maxDepth };
+    }
+
+    let originalData: any = JSON.parse(JSON.stringify(getOriginalObject(data)));
+    if (searchValue && searchValue.length > 1) {
+      const { filteredSchema, maxDepth } = filterSchema(originalData.properties, searchValue);
+      originalData.properties = filteredSchema;
+      setExpandDepth(maxDepth);
+    } else {
+      setExpandDepth(2);
+    }
+
+    setFilteredModel(originalData);
+  }, [searchValue, data]);
 
   const shouldDisplayHeader =
     !layoutOptions?.noHeading && (title !== undefined || (exportProps && !layoutOptions?.hideExport));
@@ -79,11 +153,27 @@ const ModelComponent: React.FC<ModelProps> = ({
 
       {isCompact && modelExamples}
 
+      <HStack spacing={2} mt={2}>
+        <Text as="label" aria-hidden="true" data-testid="param-label" htmlFor="search" fontSize="base">
+          Search
+        </Text>
+        <Input
+          id="search"
+          aria-label="search"
+          appearance="default"
+          type="text"
+          value={searchValue}
+          onChange={e => setSearchValue(e.currentTarget.value)}
+        />
+        <Button onClick={() => setSearchValue('')}>&times;</Button>
+      </HStack>
+
       <JsonSchemaViewer
         resolveRef={resolveRef}
         maxRefDepth={maxRefDepth}
-        schema={getOriginalObject(data)}
+        schema={filteredModel}
         nodeHasChanged={nodeHasChanged}
+        defaultExpandedDepth={expandDepth}
         skipTopLevelDescription
       />
     </VStack>
